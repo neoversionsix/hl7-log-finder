@@ -5,7 +5,7 @@ file if they have the searchterm in them'''
 
 
 # Input Variables
-searchterm = '99'
+searchterm = input('Enter the text you would like to search for: ')
 path = r'C:\hl7data'
 output_filename = 'OUTPUT.xlsx'
 output_file_path = path + r'\\' + output_filename
