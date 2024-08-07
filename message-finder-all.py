@@ -1,7 +1,7 @@
 # Input Variables
 searchterm = '9999999'
 date_greater_than = '20210609'
-date_less_than = '202106011'
+date_less_than = '202106010'
 
 import os
 import datetime
