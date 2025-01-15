@@ -2,9 +2,10 @@ import os
 import datetime
 
 # Input Variables
-searchterm = '9999999'
-date_greater_than = '20240806'
-date_less_than = '202408007'
+searchterm = 'THUY'
+# Note: Dates must be in the format YYYYMMDD, also searching more than one day is very slow
+date_greater_than = '20241205'
+date_less_than = '2024120'
 
 # Make dates numbers
 date_greater_than = int(date_greater_than)
