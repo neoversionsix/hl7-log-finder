@@ -1,233 +1,273 @@
 """
-HL7 Log Finder GUI with Calendar Date Pickers
+HL7 Log Finder GUI with Calendar Date Pickers and Enhanced Features
 
 Features:
 - Calendar-based date selection for "Date Greater Than" and "Date Less Than".
 - Comma-separated multiple search terms (e.g. "THUY, ABC123, TestString").
-- Finds HL7 messages in files within a date range (based on folder names).
-- Writes matching messages to a timestamped .md file in the 'output' subfolder.
-- Shows errors in a message box if something goes wrong (e.g., network or file writing).
+- Searches HL7 log files within a date range based on folder names.
+- Shows a live console log and status messages in the GUI.
+- Disables the search button while processing to prevent repeated clicks.
+- Includes a timeout field (default 30 seconds) to stop the search if it takes too long.
+- Writes matching HL7 messages to a timestamped HTML file in an 'output' subfolder.
+- Displays errors to the user via message boxes.
 
 Dependencies:
-- tkcalendar (pip install tkcalendar)
+- tkcalendar (install with: pip install tkcalendar)
+- tkinter (built-in)
 """
 
 import os
 import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
-from tkcalendar import DateEntry  # Provides a calendar-based date selection widget
+from tkinter.scrolledtext import ScrolledText  # Provides a scrollable text widget for console output
+from tkcalendar import DateEntry  # Calendar-based date selection widget
 
 def date_to_YYYYMMDD(date_obj):
     """
     Converts a Python date object (from DateEntry) into a YYYYMMDD string.
-
+    
     Example:
         datetime.date(2025, 1, 15) -> '20250115'
     """
     return date_obj.strftime('%Y%m%d')
 
+def log_message(msg):
+    """
+    Inserts a log message into the console widget and forces an update.
+    Also prints to the standard console (optional).
+    """
+    console_text.insert(tk.END, msg + "\n")
+    console_text.see(tk.END)  # Scroll to the end
+    # Also print to system console if desired:
+    print(msg)
+
 def run_search():
     """
-    Triggered when the user clicks the "Run Search" button.
-    1. Gathers dates from DateEntry widgets and converts them to strings (YYYYMMDD).
-    2. Gathers comma-separated search terms from the text field.
-    3. Validates user input and date ranges.
-    4. Searches HL7 log files in the specified network share, filtering by date and terms.
-    5. Writes matching messages to a file in the 'output' folder, or shows an error if needed.
+    Executes the HL7 log search:
+    1. Reads user inputs (dates, search terms, and timeout).
+    2. Validates input and sets up the output HTML file.
+    3. Iterates over folders (named by date) and files to find HL7 messages matching all search terms.
+    4. Stops processing if the search exceeds the user-defined timeout.
+    5. Writes the collected messages to an HTML file and logs progress to the GUI console.
     """
+    # Disable the Run Search button and update the status to prevent re-clicks during processing.
+    btn_run.config(state='disabled')
+    status_var.set("Status: Searching... Please wait.")
+    console_text.delete('1.0', tk.END)  # Clear previous console output
+
+    # Record the search start time to enforce the timeout
+    start_time = datetime.datetime.now()
 
     # -------------------------------------------------------------------------
-    # 1. Get user inputs from the GUI
+    # 1. Retrieve and validate user inputs
     # -------------------------------------------------------------------------
-    # Convert the selected calendar dates to YYYYMMDD format for numeric comparison
+    # Convert DateEntry selections into YYYYMMDD string format
     date_greater_str = date_to_YYYYMMDD(date_greater_entry.get_date())
     date_less_str    = date_to_YYYYMMDD(date_less_entry.get_date())
 
-    # Get the user-entered comma-separated search terms
+    # Get the user-entered comma-separated search terms and remove extraneous spaces
     search_terms_str = entry_search_terms.get().strip()
-
-    # If no search terms are entered, show an error and stop
     if not search_terms_str:
         messagebox.showerror("Input Error", "Please enter at least one search term.")
+        btn_run.config(state='normal')
+        status_var.set("Status: Idle")
         return
-
-    # Convert the comma-separated string into a list of terms, stripping whitespace
     terms = [term.strip() for term in search_terms_str.split(',') if term.strip()]
 
-    # -------------------------------------------------------------------------
-    # 2. Parse and validate date strings
-    # -------------------------------------------------------------------------
-    # Convert them to integers for numeric comparison (YYYYMMDD -> int)
+    # Get and validate the timeout value; use 30 seconds if conversion fails.
+    try:
+        timeout_seconds = int(entry_timeout.get().strip())
+    except ValueError:
+        timeout_seconds = 30
+
+    # Validate date range: the start date must be strictly less than the end date.
     try:
         date_greater_than = int(date_greater_str)
         date_less_than    = int(date_less_str)
     except ValueError:
-        # If conversion fails (should not happen with DateEntry, but just in case)
         messagebox.showerror("Input Error", "Error converting dates. Please re-check your selections.")
+        btn_run.config(state='normal')
+        status_var.set("Status: Idle")
         return
-
-    # We want "date_greater_than" to be less than "date_less_than"
     if date_greater_than >= date_less_than:
         messagebox.showerror("Input Error", "'Date Greater Than' must be strictly less than 'Date Less Than'.")
+        btn_run.config(state='normal')
+        status_var.set("Status: Idle")
         return
 
     # -------------------------------------------------------------------------
-    # 3. Prepare output filename and path
+    # 2. Setup output HTML file
     # -------------------------------------------------------------------------
-    # Create a timestamp for the filename, e.g., "2025-01-15T12-33-49_123456"
+    # Generate a timestamp string to uniquely name the output file
     timestamp_str = datetime.datetime.now().isoformat().replace(':', '-').replace('.', '_')
-    filename = f'OUTPUT-{timestamp_str}.md'
+    filename = f'OUTPUT-{timestamp_str}.html'  # Output file now in HTML format
 
-    # Determine where the script is running from
-    # __file__ works if this code is in a .py file; otherwise, fallback to os.getcwd()
+    # Determine the script's directory and create an 'output' folder if it doesn't exist
     script_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
-
-    # Create or verify there's an 'output' subfolder next to the script
     output_folder = os.path.join(script_dir, 'output')
     os.makedirs(output_folder, exist_ok=True)
-
-    # Full path to the output file
     output_file_path = os.path.join(output_folder, filename)
 
-    # Initialize a list to store the matched results
-    output_lines = ['# HL7 Search Results\n']
+    # Initialize a list to store HTML-formatted search results
+    output_lines = [
+        "<html><head><meta charset='UTF-8'><title>HL7 Search Results</title></head><body>\n",
+        "<h1>HL7 Search Results</h1>\n"
+    ]
 
     # -------------------------------------------------------------------------
-    # 4. Search files in the network share
+    # 3. Search for HL7 messages in the network share
     # -------------------------------------------------------------------------
-    # Example UNC path (change to the correct share/folder as needed):
     network_share_path = r'\\whsrhaparch1\RhapsodyHL7FileLogs_Prod\MasterLog'
-
-    # Try to list the top-level folder
     try:
         files_or_folders = os.listdir(network_share_path)
     except Exception as e:
-        # If this fails, it's likely a permissions or connectivity error
         messagebox.showerror("Network Error", f"Could not list directory:\n{str(e)}")
+        btn_run.config(state='normal')
+        status_var.set("Status: Idle")
         return
 
-    # Filter out anything ending with '.zip', as we only want folders
+    # Filter to include only folder names (exclude files ending with '.zip')
     folders = [item for item in files_or_folders if not item.endswith('zip')]
-
-    # Extract folders that match our date criteria from their first 8 chars
+    # Select folders where the first 8 characters are a date within the specified range
     filtered_folders = [
         folder for folder in folders
-        if len(folder) >= 8 and folder[:8].isdigit()
-           and date_greater_than < int(folder[:8]) < date_less_than
+        if len(folder) >= 8 and folder[:8].isdigit() and date_greater_than < int(folder[:8]) < date_less_than
     ]
 
-    # Optional: Print the search process to console for debugging
-    print('# HL7 Search Results (Console Output)')
+    log_message("Starting HL7 search...")
+    log_message("Console Output:")
 
-    # Loop over each filtered folder
+    timeout_occurred = False  # Flag to indicate if timeout was reached
+
+    # Loop over each folder that falls within the date range
     for folder_name in filtered_folders:
-        folder_path = os.path.join(network_share_path, folder_name)
+        # Check for timeout after processing each folder
+        elapsed = (datetime.datetime.now() - start_time).total_seconds()
+        if elapsed > timeout_seconds:
+            log_message("Timeout reached: Not all messages were searched. Outputting partial results.")
+            timeout_occurred = True
+            break
 
-        # Try listing files in the folder
+        folder_path = os.path.join(network_share_path, folder_name)
         try:
             files_in_folder = os.listdir(folder_path)
         except Exception as e:
-            print(f"Skipping folder '{folder_name}' due to error: {e}")
+            log_message(f"Skipping folder '{folder_name}' due to error: {e}")
             continue
 
-        # Loop over each file in the folder
+        # Loop over each file in the current folder
         for file_name in files_in_folder:
-            file_path = os.path.join(folder_path, file_name)
+            # Check timeout after each file as well
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+            if elapsed > timeout_seconds:
+                log_message("Timeout reached: Not all messages were searched. Outputting partial results.")
+                timeout_occurred = True
+                break
 
-            # Try opening the file in read mode
+            file_path = os.path.join(folder_path, file_name)
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='replace') as infile:
                     read_data = infile.read()
             except Exception as e:
-                print(f"Skipping file '{file_path}' due to error: {e}")
+                log_message(f"Skipping file '{file_path}' due to error: {e}")
                 continue
 
-            # HL7 messages are separated by '======'
+            # Split the file content into HL7 messages using '======' as delimiter
             hl7_list = read_data.split('======')
-
-            # For each HL7 message, check if all terms are present
             for hl7_message in hl7_list:
-                # If you want ANY term to match, change "all" -> "any"
+                # Check if the HL7 message contains all of the search terms (change to "any" if desired)
                 if all(term in hl7_message for term in terms):
-                    # Print to console (optional)
-                    print(f'## {file_path}')
-                    print(hl7_message)
+                    log_message(f'Found match in: {file_path}')
+                    log_message(hl7_message)
+                    # Append results to the HTML output with proper tags
+                    output_lines.append(f"<h2>{file_path}</h2>\n")
+                    output_lines.append(f"<pre>{hl7_message}</pre>\n")
+        if timeout_occurred:
+            break
 
-                    # Add the message to the output buffer
-                    output_lines.append(f'## {file_path}\n')
-                    output_lines.append(f'{hl7_message}\n')
-                    print('Added HL7 message to output')
+    # Close the HTML document structure
+    output_lines.append("</body></html>\n")
 
     # -------------------------------------------------------------------------
-    # 5. Write the results to the output file
+    # 4. Write the HTML output file and finalize the search
     # -------------------------------------------------------------------------
     try:
         with open(output_file_path, 'w', encoding='utf-8') as outfile:
             outfile.writelines(output_lines)
-        # Notify the user of success
         messagebox.showinfo("Success", f"Search complete!\n\nResults saved to:\n{output_file_path}")
-        print(f"Successfully wrote output to {output_file_path}")
+        log_message(f"Successfully wrote output to {output_file_path}")
     except Exception as e:
-        # If writing fails, show error and print everything to console
-        msg = f"Error writing to file: {e}\nPrinting results to console instead."
-        messagebox.showerror("File Write Error", msg)
-        print(msg)
-        print(''.join(output_lines))
+        err_msg = f"Error writing to file: {e}\nPrinting results to console instead."
+        messagebox.showerror("File Write Error", err_msg)
+        log_message(err_msg)
+        log_message(''.join(output_lines))
 
-# -----------------------------------------------------------------------------
+    # Re-enable the Run Search button and update the status to idle after search completes
+    btn_run.config(state='normal')
+    status_var.set("Status: Idle")
+
+# ---------------------------------------------------------------------------
 # GUI Setup
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 root = tk.Tk()
 root.title("HL7 Log Finder")
-root.resizable(False, False)  # Window won't be resizable
+root.resizable(False, False)  # Fixed window size
 
-# Main frame to hold all controls, with some padding
+# Main frame to hold controls with padding
 frame = ttk.Frame(root, padding="10 10 10 10")
 frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
 
-# -----------------------------------------------------------------------------
-# 1. Date Greater Than (DateEntry)
-# -----------------------------------------------------------------------------
+# ---------------------------
+# 1. Date Greater Than Picker
+# ---------------------------
 ttk.Label(frame, text="Date Greater Than:").grid(row=0, column=0, sticky=tk.W)
-
-# DateEntry widget uses the system calendar by default
 date_greater_entry = DateEntry(frame, width=12, date_pattern="yyyy/mm/dd")
 date_greater_entry.grid(row=0, column=1, padx=5, pady=5)
 
-# Pre-fill with an example date if you like:
-# date_greater_entry.set_date(datetime.date(2024, 12, 5))
-
-# -----------------------------------------------------------------------------
-# 2. Date Less Than (DateEntry)
-# -----------------------------------------------------------------------------
+# ---------------------------
+# 2. Date Less Than Picker
+# ---------------------------
 ttk.Label(frame, text="Date Less Than:").grid(row=1, column=0, sticky=tk.W)
-
 date_less_entry = DateEntry(frame, width=12, date_pattern="yyyy/mm/dd")
 date_less_entry.grid(row=1, column=1, padx=5, pady=5)
 
-# Pre-fill with an example date if you like:
-# date_less_entry.set_date(datetime.date(2024, 12, 6))
-
-# -----------------------------------------------------------------------------
-# 3. Search Terms (comma-separated)
-# -----------------------------------------------------------------------------
+# ---------------------------
+# 3. Search Terms Entry (comma-separated)
+# ---------------------------
 ttk.Label(frame, text="Search Terms (comma-separated):").grid(row=2, column=0, sticky=tk.W)
-
 entry_search_terms = ttk.Entry(frame, width=30)
 entry_search_terms.grid(row=2, column=1, padx=5, pady=5)
+entry_search_terms.insert(0, "THUY, ABC123")  # Example placeholder
 
-# Example placeholder
-entry_search_terms.insert(0, "THUY, ABC123")
+# ---------------------------
+# 4. Timeout Entry (in seconds)
+# ---------------------------
+ttk.Label(frame, text="Timeout (seconds):").grid(row=3, column=0, sticky=tk.W)
+entry_timeout = ttk.Entry(frame, width=10)
+entry_timeout.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
+entry_timeout.insert(0, "30")  # Default timeout value
 
-# -----------------------------------------------------------------------------
-# 4. Run Search Button
-# -----------------------------------------------------------------------------
+# ---------------------------
+# 5. Run Search Button
+# ---------------------------
 btn_run = ttk.Button(frame, text="Run Search", command=run_search)
-btn_run.grid(row=3, column=0, columnspan=2, pady=10)
+btn_run.grid(row=4, column=0, columnspan=2, pady=10)
 
-# -----------------------------------------------------------------------------
-# START THE GUI LOOP
-# -----------------------------------------------------------------------------
-# This starts Tkinter's event processing loop, so the window remains open.
+# ---------------------------
+# 6. Status Label
+# ---------------------------
+status_var = tk.StringVar()
+status_var.set("Status: Idle")
+status_label = ttk.Label(frame, textvariable=status_var)
+status_label.grid(row=5, column=0, columnspan=2, sticky=tk.W)
+
+# ---------------------------
+# 7. Console Text Widget (for log output)
+# ---------------------------
+ttk.Label(root, text="Console Output:").grid(row=1, column=0, sticky=tk.W, padx=10)
+console_text = ScrolledText(root, width=80, height=20, wrap=tk.WORD)
+console_text.grid(row=2, column=0, padx=10, pady=5)
+
+# Start the Tkinter event loop.
 root.mainloop()
