@@ -1,20 +1,21 @@
 """
-HL7 Log Finder GUI with Dark Theme, Single Default Search Term, Timeout Warning, 
-Progress Bar, and Color-Changing Run Button
-
-In this version:
-- Only one search term field is shown by default (prefilled with "9999999").
-- The user can add more search terms if needed.
-- The Run Search button turns red during search, then back to green.
-- The progress bar animates by calling root.update() inside the loops.
+HL7 Log Finder GUI
+- Dark Theme
+- Single Default Search Term
+- Countdown Progress Bar from 100% to 0%
+- Timeout Warning Popup
+- Color-Changing Run Button (green -> red -> green)
+- Date Pickers with dd/mmm/yyyy format
+- "Date Greater Than" defaults to (Today - 2 days)
+- HTML output includes a Copy button under each <pre> block
 """
 
 import os
 import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
-from tkinter.scrolledtext import ScrolledText  # Scrollable text widget for console output
-from tkcalendar import DateEntry  # Calendar-based date selection widget
+from tkinter.scrolledtext import ScrolledText
+from tkcalendar import DateEntry
 
 # ---------------------------
 # Helper Functions and Globals
@@ -32,51 +33,60 @@ def add_search_term_field(default_text=""):
 
 def log_message(msg):
     """
-    Inserts a log message into the console widget (without printing individual HL7 messages)
-    and forces an update. Also prints to the standard console.
+    Inserts a log message into the console widget and forces an update.
+    Also prints to the standard console (optional).
     """
     console_text.insert(tk.END, msg + "\n")
     console_text.see(tk.END)
     print(msg)
 
+def reset_ui():
+    """
+    Re-enable the Run button (green style), reset the progress bar to 100%, and set status to idle.
+    """
+    btn_run.config(style="GreenButton.TButton", state='normal')
+    status_var.set("Status: Idle")
+    progress_bar['value'] = 100  # reset to full
+    # No need to 'stop' because we're in determinate mode
+
 def run_search():
     """
     Executes the HL7 log search process:
-    1. Reads user inputs (dates, individual search terms, and timeout).
-    2. Validates input and sets up the output HTML file.
-    3. Iterates over folders (named by date) and files to find HL7 messages matching all search terms.
-    4. Checks the elapsed time and stops if the search exceeds the user-defined timeout.
-    5. Writes the collected messages to an HTML file and logs progress to the GUI console.
-    6. Uses a progress bar to indicate ongoing processing.
-    7. Periodically calls root.update() so the GUI remains somewhat responsive.
+    1. Reads user inputs (dates, search terms, timeout).
+    2. Validates inputs and sets up the output HTML file.
+    3. Iterates over folders/files, searching for HL7 messages containing all search terms.
+    4. Each iteration updates the countdown progress bar from 100% -> 0% over 'timeout_seconds'.
+    5. Writes matches to a timestamped HTML file, each with a Copy button.
+    6. If timeout is reached, stops and warns the user.
+    7. Button returns to green after completion.
     """
-    # Change the Run Search button to red and start progress bar
+    # Change the Run Search button to red
     btn_run.config(style="RedButton.TButton", state='disabled')
     status_var.set("Status: Searching...")
-    progress_bar.start(10)
     console_text.delete('1.0', tk.END)  # Clear previous log output
 
-    # Force a quick GUI update so the button color and progress bar start immediately
+    # Initialize the progress bar for a 100%->0% countdown
+    progress_bar.config(mode='determinate', maximum=100)
+    progress_bar['value'] = 100
+
+    # Force a quick GUI update so the button color and progress bar show immediately
     root.update()
 
-    # Record the start time for timeout enforcement
     start_time = datetime.datetime.now()
 
     # ---------------------------
     # 1. Retrieve and Validate User Inputs
     # ---------------------------
-    # Convert the DateEntry selections to YYYYMMDD format
     date_greater_str = date_to_YYYYMMDD(date_greater_entry.get_date())
     date_less_str    = date_to_YYYYMMDD(date_less_entry.get_date())
 
-    # Gather individual search term entries and ignore blank ones
     terms = [entry.get().strip() for entry in search_term_entries if entry.get().strip()]
     if not terms:
         messagebox.showerror("Input Error", "Please enter at least one search term.")
         reset_ui()
         return
 
-    # Get and validate the timeout value (default to 30 seconds if invalid)
+    # Timeout in seconds
     try:
         timeout_seconds = int(entry_timeout.get().strip())
     except ValueError:
@@ -104,11 +114,23 @@ def run_search():
     output_folder = os.path.join(script_dir, 'output')
     os.makedirs(output_folder, exist_ok=True)
     output_file_path = os.path.join(output_folder, filename)
-    
+
+    # HTML header with JavaScript for copy-to-clipboard
     output_lines = [
-        "<html><head><meta charset='UTF-8'><title>HL7 Search Results</title></head><body>\n",
+        "<html><head><meta charset='UTF-8'><title>HL7 Search Results</title>\n",
+        "<script>\n",
+        "function copyToClipboard(elemId) {\n",
+        "  var text = document.getElementById(elemId).innerText;\n",
+        "  navigator.clipboard.writeText(text)\n",
+        "    .then(() => alert('Copied to clipboard'))\n",
+        "    .catch(err => console.error('Failed to copy text', err));\n",
+        "}\n",
+        "</script>\n",
+        "</head><body>\n",
         "<h1>HL7 Search Results</h1>\n"
     ]
+
+    msg_counter = 1  # unique ID for each <pre> block
 
     # ---------------------------
     # 3. Search for HL7 Messages
@@ -132,9 +154,15 @@ def run_search():
     timeout_occurred = False
 
     for folder_name in filtered_folders:
-        # Check for timeout after each folder
+        # Update progress bar countdown
         elapsed = (datetime.datetime.now() - start_time).total_seconds()
-        if elapsed > timeout_seconds:
+        time_left = timeout_seconds - elapsed
+        if time_left < 0:
+            time_left = 0
+        progress_bar['value'] = (time_left / timeout_seconds) * 100
+        root.update()
+
+        if time_left <= 0:
             timeout_occurred = True
             log_message("Timeout reached: Stopping search and outputting partial results.")
             break
@@ -147,8 +175,15 @@ def run_search():
             continue
 
         for file_name in files_in_folder:
+            # Update progress bar countdown
             elapsed = (datetime.datetime.now() - start_time).total_seconds()
-            if elapsed > timeout_seconds:
+            time_left = timeout_seconds - elapsed
+            if time_left < 0:
+                time_left = 0
+            progress_bar['value'] = (time_left / timeout_seconds) * 100
+            root.update()
+
+            if time_left <= 0:
                 timeout_occurred = True
                 log_message("Timeout reached: Stopping search and outputting partial results.")
                 break
@@ -159,8 +194,6 @@ def run_search():
                     read_data = infile.read()
             except Exception as e:
                 log_message(f"Skipping file '{file_path}' due to error: {e}")
-                # Periodically update the UI
-                root.update()
                 continue
 
             # Split the file content into HL7 messages using '======'
@@ -168,18 +201,17 @@ def run_search():
             for hl7_message in hl7_list:
                 # Check if the HL7 message contains all of the search terms
                 if all(term in hl7_message for term in terms):
-                    # Only log the file path (not the entire HL7 message)
                     log_message(f"Found match in: {file_path}")
+                    # Insert <pre> block with unique ID and a copy button
                     output_lines.append(f"<h2>{file_path}</h2>\n")
-                    output_lines.append(f"<pre>{hl7_message}</pre>\n")
-
-            # After each file, let the GUI update so the progress bar can move
-            root.update()
+                    output_lines.append(f"<pre id='msg_{msg_counter}'>{hl7_message}</pre>\n")
+                    output_lines.append(f"<button onclick=\"copyToClipboard('msg_{msg_counter}')\">Copy</button><br/>\n")
+                    msg_counter += 1
 
         if timeout_occurred:
             break
 
-    # If a timeout occurred, show a pop-up warning once.
+    # If a timeout occurred, show a pop-up warning
     if timeout_occurred:
         messagebox.showwarning("Timeout", "Timeout reached: Not all messages were searched. Partial results will be output.")
 
@@ -204,17 +236,9 @@ def run_search():
     # ---------------------------
     reset_ui()
 
-def reset_ui():
-    """
-    Re-enable the Run button (green style), stop the progress bar, and set status to idle.
-    """
-    btn_run.config(style="GreenButton.TButton", state='normal')
-    status_var.set("Status: Idle")
-    progress_bar.stop()
-
 def date_to_YYYYMMDD(date_obj):
     """
-    Converts a Python date object (from DateEntry) into a YYYYMMDD string.
+    Converts a Python date object into a YYYYMMDD string.
     
     Example:
         datetime.date(2025, 1, 15) -> '20250115'
@@ -222,7 +246,7 @@ def date_to_YYYYMMDD(date_obj):
     return date_obj.strftime('%Y%m%d')
 
 # ---------------------------
-# GUI Setup and Dark Theme Configuration
+# GUI Setup
 # ---------------------------
 root = tk.Tk()
 root.title("HL7 Log Finder")
@@ -252,63 +276,55 @@ style.map("RedButton.TButton",
 frame = ttk.Frame(root, padding="10 10 10 10")
 frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
 
-# ---------------------------
-# 1. Date Pickers for Start and End Dates
-# ---------------------------
+# 1. Date Pickers (with dd/mmm/yyyy pattern)
 ttk.Label(frame, text="Date Greater Than:").grid(row=0, column=0, sticky=tk.W)
 date_greater_entry = DateEntry(frame, width=12, date_pattern="yyyy/mm/dd")
 date_greater_entry.grid(row=0, column=1, padx=5, pady=5)
+# Default to 2 days ago
+two_days_ago = datetime.date.today() - datetime.timedelta(days=2)
+date_greater_entry.set_date(two_days_ago)
 
 ttk.Label(frame, text="Date Less Than:").grid(row=1, column=0, sticky=tk.W)
 date_less_entry = DateEntry(frame, width=12, date_pattern="yyyy/mm/dd")
 date_less_entry.grid(row=1, column=1, padx=5, pady=5)
+# Optionally set a default for 'less than' if you want, e.g. today or tomorrow
+# date_less_entry.set_date(datetime.date.today())
 
-# ---------------------------
 # 2. Search Term Fields with "Add Search Term" Button
-# ---------------------------
 ttk.Label(frame, text="Search Terms:").grid(row=2, column=0, sticky=tk.NW)
-# Frame to hold individual search term entry fields
 frame_search_terms = ttk.Frame(frame)
 frame_search_terms.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
-
-# Create a single initial search term field, prefilled with "9999999"
+# Create a single initial search term field
 add_search_term_field("9999999")
 
-# Button to add another search term field
 btn_add_term = ttk.Button(frame, text="Add Search Term", command=lambda: add_search_term_field())
 btn_add_term.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
 
-# ---------------------------
 # 3. Timeout Entry Field
-# ---------------------------
 ttk.Label(frame, text="Timeout (seconds):").grid(row=4, column=0, sticky=tk.W)
 entry_timeout = ttk.Entry(frame, width=10)
 entry_timeout.grid(row=4, column=1, padx=5, pady=5, sticky=tk.W)
 entry_timeout.insert(0, "30")  # Default timeout value
 
-# ---------------------------
 # 4. Run Search Button (Green by default)
-# ---------------------------
 btn_run = ttk.Button(frame, text="Run Search", command=run_search, style="GreenButton.TButton")
 btn_run.grid(row=5, column=0, columnspan=2, pady=10)
 
-# ---------------------------
 # 5. Status Label and Progress Bar
-# ---------------------------
 status_var = tk.StringVar()
 status_var.set("Status: Idle")
 status_label = ttk.Label(frame, textvariable=status_var)
 status_label.grid(row=6, column=0, columnspan=2, sticky=tk.W)
 
-progress_bar = ttk.Progressbar(frame, orient='horizontal', mode='indeterminate', length=200)
+progress_bar = ttk.Progressbar(frame, orient='horizontal', mode='determinate', length=200)
 progress_bar.grid(row=7, column=0, columnspan=2, pady=5)
+progress_bar['maximum'] = 100
+progress_bar['value'] = 100  # Start full
 
-# ---------------------------
 # 6. Console Text Widget for Log Output
-# ---------------------------
 ttk.Label(root, text="Console Output:").grid(row=1, column=0, sticky=tk.W, padx=10)
 console_text = ScrolledText(root, width=80, height=20, wrap=tk.WORD, bg="#3e3e3e", fg="white", insertbackground="white")
 console_text.grid(row=2, column=0, padx=10, pady=5)
 
-# Start the Tkinter event loop.
+# Start the Tkinter event loop
 root.mainloop()
