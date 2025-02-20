@@ -2,3 +2,8 @@
 # It specifies intentionally untracked files to ignore.
 # The pattern /output/ tells Git to ignore the output directory at the root of the repository.
 /output/
+
+# PyInstaller build artifacts
+/build/
+/dist/
+/*.spec
