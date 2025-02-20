@@ -1,15 +1,12 @@
 """
-HL7 Log Finder GUI with Dark Theme, Multiple Search Term Fields, Timeout Warning, and Progress Bar
+HL7 Log Finder GUI with Dark Theme, Single Default Search Term, Timeout Warning, 
+Progress Bar, and Color-Changing Run Button
 
-Features:
-- Calendar-based date selection for "Date Greater Than" and "Date Less Than".
-- Multiple search term entry fields with an "Add Search Term" button.
-- Searches HL7 log files within a date range based on folder names.
-- Displays a live console log and a progress bar during processing.
-- Disables the search button while processing.
-- Enforces a user-defined timeout (default 30 seconds) and shows a pop-up warning on timeout.
-- Writes matching HL7 messages to a timestamped HTML file in an 'output' subfolder.
-- Uses a dark theme for the entire GUI.
+In this version:
+- Only one search term field is shown by default (prefilled with "9999999").
+- The user can add more search terms if needed.
+- The Run Search button turns red during search, then back to green.
+- The progress bar animates by calling root.update() inside the loops.
 """
 
 import os
@@ -51,12 +48,16 @@ def run_search():
     4. Checks the elapsed time and stops if the search exceeds the user-defined timeout.
     5. Writes the collected messages to an HTML file and logs progress to the GUI console.
     6. Uses a progress bar to indicate ongoing processing.
+    7. Periodically calls root.update() so the GUI remains somewhat responsive.
     """
-    # Disable Run Search button and start progress bar
-    btn_run.config(state='disabled')
+    # Change the Run Search button to red and start progress bar
+    btn_run.config(style="RedButton.TButton", state='disabled')
     status_var.set("Status: Searching...")
     progress_bar.start(10)
     console_text.delete('1.0', tk.END)  # Clear previous log output
+
+    # Force a quick GUI update so the button color and progress bar start immediately
+    root.update()
 
     # Record the start time for timeout enforcement
     start_time = datetime.datetime.now()
@@ -64,7 +65,7 @@ def run_search():
     # ---------------------------
     # 1. Retrieve and Validate User Inputs
     # ---------------------------
-    # Get and convert the DateEntry selections to YYYYMMDD format
+    # Convert the DateEntry selections to YYYYMMDD format
     date_greater_str = date_to_YYYYMMDD(date_greater_entry.get_date())
     date_less_str    = date_to_YYYYMMDD(date_less_entry.get_date())
 
@@ -72,9 +73,7 @@ def run_search():
     terms = [entry.get().strip() for entry in search_term_entries if entry.get().strip()]
     if not terms:
         messagebox.showerror("Input Error", "Please enter at least one search term.")
-        btn_run.config(state='normal')
-        status_var.set("Status: Idle")
-        progress_bar.stop()
+        reset_ui()
         return
 
     # Get and validate the timeout value (default to 30 seconds if invalid)
@@ -88,16 +87,12 @@ def run_search():
         date_less_than    = int(date_less_str)
     except ValueError:
         messagebox.showerror("Input Error", "Error converting dates. Please re-check your selections.")
-        btn_run.config(state='normal')
-        status_var.set("Status: Idle")
-        progress_bar.stop()
+        reset_ui()
         return
 
     if date_greater_than >= date_less_than:
         messagebox.showerror("Input Error", "'Date Greater Than' must be strictly less than 'Date Less Than'.")
-        btn_run.config(state='normal')
-        status_var.set("Status: Idle")
-        progress_bar.stop()
+        reset_ui()
         return
 
     # ---------------------------
@@ -123,9 +118,7 @@ def run_search():
         files_or_folders = os.listdir(network_share_path)
     except Exception as e:
         messagebox.showerror("Network Error", f"Could not list directory:\n{str(e)}")
-        btn_run.config(state='normal')
-        status_var.set("Status: Idle")
-        progress_bar.stop()
+        reset_ui()
         return
 
     folders = [item for item in files_or_folders if not item.endswith('zip')]
@@ -166,6 +159,8 @@ def run_search():
                     read_data = infile.read()
             except Exception as e:
                 log_message(f"Skipping file '{file_path}' due to error: {e}")
+                # Periodically update the UI
+                root.update()
                 continue
 
             # Split the file content into HL7 messages using '======'
@@ -177,6 +172,10 @@ def run_search():
                     log_message(f"Found match in: {file_path}")
                     output_lines.append(f"<h2>{file_path}</h2>\n")
                     output_lines.append(f"<pre>{hl7_message}</pre>\n")
+
+            # After each file, let the GUI update so the progress bar can move
+            root.update()
+
         if timeout_occurred:
             break
 
@@ -203,7 +202,13 @@ def run_search():
     # ---------------------------
     # 5. Reset the UI State
     # ---------------------------
-    btn_run.config(state='normal')
+    reset_ui()
+
+def reset_ui():
+    """
+    Re-enable the Run button (green style), stop the progress bar, and set status to idle.
+    """
+    btn_run.config(style="GreenButton.TButton", state='normal')
     status_var.set("Status: Idle")
     progress_bar.stop()
 
@@ -227,10 +232,21 @@ root.resizable(False, False)
 root.tk_setPalette(background="#2e2e2e", foreground="white", activeBackground="#3e3e3e", activeForeground="white")
 style = ttk.Style(root)
 style.theme_use('clam')
+
+# Configure general styles
 style.configure("TLabel", background="#2e2e2e", foreground="white")
 style.configure("TButton", background="#3e3e3e", foreground="white")
 style.configure("TEntry", fieldbackground="#3e3e3e", foreground="white")
 style.configure("TFrame", background="#2e2e2e")
+
+# Define two custom button styles: green (idle) and red (running)
+style.configure("GreenButton.TButton", background="green", foreground="white")
+style.map("GreenButton.TButton",
+          background=[("active", "#228B22")])  # Darker green on hover
+
+style.configure("RedButton.TButton", background="red", foreground="white")
+style.map("RedButton.TButton",
+          background=[("active", "#8B0000")])  # Darker red on hover
 
 # Main frame for controls
 frame = ttk.Frame(root, padding="10 10 10 10")
@@ -254,8 +270,10 @@ ttk.Label(frame, text="Search Terms:").grid(row=2, column=0, sticky=tk.NW)
 # Frame to hold individual search term entry fields
 frame_search_terms = ttk.Frame(frame)
 frame_search_terms.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
-# Create initial search term field
-add_search_term_field("THUY")
+
+# Create a single initial search term field, prefilled with "9999999"
+add_search_term_field("9999999")
+
 # Button to add another search term field
 btn_add_term = ttk.Button(frame, text="Add Search Term", command=lambda: add_search_term_field())
 btn_add_term.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
@@ -269,9 +287,9 @@ entry_timeout.grid(row=4, column=1, padx=5, pady=5, sticky=tk.W)
 entry_timeout.insert(0, "30")  # Default timeout value
 
 # ---------------------------
-# 4. Run Search Button
+# 4. Run Search Button (Green by default)
 # ---------------------------
-btn_run = ttk.Button(frame, text="Run Search", command=run_search)
+btn_run = ttk.Button(frame, text="Run Search", command=run_search, style="GreenButton.TButton")
 btn_run.grid(row=5, column=0, columnspan=2, pady=10)
 
 # ---------------------------
